@@ -462,8 +462,10 @@ export default class S3UploaderPlugin extends Plugin {
 
 		const filteredReferences = references.filter(
 			(item) =>
-				item.source === "external" ||
-				this.settings.uploadLocalNoteImages,
+				(item.source === "external" &&
+					!item.url.includes("amazonaws.com")) ||
+				(item.source === "local" &&
+					this.settings.uploadLocalNoteImages),
 		);
 
 		if (filteredReferences.length === 0) {
