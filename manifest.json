@@ -1,11 +1,10 @@
 {
-	"id": "s3-image-uploader",
-	"name": "S3 Image Uploader",
+	"id": "s3-image-uploader_v2",
+	"name": "S3 Image Uploader_v2",
 	"minAppVersion": "0.15.0",
-	"description": "This is an image uploader for Obsidian that allows you to self host images on AWS s3. This plugin is supported by advertisements.",
-	"author": "jvsteiner",
-	"authorUrl": "https://github.com/jvsteiner",
-	"fundingUrl": "https://www.buymeacoffee.com/jvsteiner",
+	"description": "This is an image uploader for Obsidian that allows you to self host images on AWS s3. Forked from the JV Steiner repo. Added function to upload all images in the current note",
+	"author": "volition74",
+	"authorUrl": "https://github.com/volition74",
 	"isDesktopOnly": false,
-	"version": "0.2.47"
+	"version": "2.0.0"
 }

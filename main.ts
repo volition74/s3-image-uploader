@@ -435,6 +435,242 @@ export default class S3UploaderPlugin extends Plugin {
 		}
 	}
 
+	private async uploadExternalImagesInCurrentNote(
+		editor: Editor,
+	): Promise<void> {
+		const noteFile = this.app.workspace.getActiveFile();
+		if (!noteFile) {
+			new Notice("No active note found.");
+			return;
+		}
+
+		if (this.shouldIgnoreCurrentFile()) {
+			new Notice("Current note is ignored by the plugin ignore pattern.");
+			return;
+		}
+
+		const content = editor.getValue();
+		const references = this.parseExternalImageReferences(content);
+		if (references.length === 0) {
+			new Notice("No external image links found in the current note.");
+			return;
+		}
+
+		new Notice(`Uploading ${references.length} external image(s)...`);
+
+		const localUpload =
+			this.app.metadataCache.getFileCache(noteFile)?.frontmatter
+				?.localUpload ?? this.settings.localUpload;
+
+		const uploadResults: Array<{
+			item: {
+				type: "markdown" | "html";
+				fullMatch: string;
+				url: string;
+				alt: string;
+				title: string;
+				start: number;
+				end: number;
+			};
+			url: string;
+		}> = [];
+
+		for (const item of references) {
+			try {
+				const file = await this.downloadRemoteFile(item.url);
+				const url = await this.uploadImageFile(
+					file,
+					noteFile,
+					localUpload,
+				);
+				uploadResults.push({ item, url });
+			} catch (error) {
+				console.error("Failed to upload external image", item.url, error);
+			}
+		}
+
+		if (uploadResults.length === 0) {
+			new Notice("No external images were uploaded.");
+			return;
+		}
+
+		const changes = uploadResults
+			.sort((a, b) => b.item.start - a.item.start)
+			.map(({ item, url }) => {
+				const replacement =
+					item.type === "markdown"
+						? `![${item.alt}](${url}${
+							item.title ? ` "${item.title}"` : ""
+						})`
+						: item.fullMatch.replace(
+							/src=(['"])([^'"]+)\1/i,
+							`src=$1${url}$1`,
+						);
+				return {
+					from: editor.offsetToPos(item.start),
+					to: editor.offsetToPos(item.end),
+					text: replacement,
+				};
+			});
+
+		editor.transaction({ changes });
+		new Notice(
+			`Uploaded ${uploadResults.length} external image(s) in current note.`,
+		);
+	}
+
+	private parseExternalImageReferences(
+		content: string,
+	): Array<{
+		type: "markdown" | "html";
+		fullMatch: string;
+		url: string;
+		alt: string;
+		title: string;
+		start: number;
+		end: number;
+	}> {
+		const references: Array<{
+		type: "markdown" | "html";
+		fullMatch: string;
+		url: string;
+		alt: string;
+		title: string;
+		start: number;
+		end: number;
+	}> = [];
+
+		const markdownRegex = /!\[([^\]]*)\]\(\s*(https?:\/\/[^\s)]+?)(?:\s+["']([^"']*)["'])?\s*\)/g;
+		let markdownMatch: RegExpExecArray | null;
+		while ((markdownMatch = markdownRegex.exec(content))) {
+			references.push({
+				type: "markdown",
+				fullMatch: markdownMatch[0],
+				url: markdownMatch[2],
+				alt: markdownMatch[1] ?? "",
+				title: markdownMatch[3] ?? "",
+				start: markdownMatch.index,
+				end: markdownMatch.index + markdownMatch[0].length,
+			});
+		}
+
+		const htmlRegex = /<img\s+[^>]*src=(['"])(https?:\/\/[^"']+)\1[^>]*>/gi;
+		let htmlMatch: RegExpExecArray | null;
+		while ((htmlMatch = htmlRegex.exec(content))) {
+			const fullMatch = htmlMatch[0];
+			const altMatch = /alt=(['"])(.*?)\1/i.exec(fullMatch);
+			references.push({
+				type: "html",
+				fullMatch,
+				url: htmlMatch[2],
+				alt: altMatch?.[2] ?? "",
+				title: "",
+				start: htmlMatch.index,
+				end: htmlMatch.index + fullMatch.length,
+			});
+		}
+
+		return references;
+	}
+
+	private async downloadRemoteFile(url: string): Promise<File> {
+		const response = await requestUrl({ url, method: "GET" });
+		const arrayBuffer = response.arrayBuffer;
+		const contentType =
+			(response.headers["content-type"] as string) ||
+			(response.headers["Content-Type"] as string) ||
+			"application/octet-stream";
+		const fileName = this.getFileNameFromUrl(url, contentType);
+		return new File([arrayBuffer], fileName, {
+			type: contentType,
+		});
+	}
+
+	private getFileNameFromUrl(url: string, contentType: string): string {
+		try {
+			const parsed = new URL(url);
+			const rawName = parsed.pathname.split("/").pop() || "";
+			const name = rawName.split(/[?#]/)[0];
+			if (name) {
+				return name;
+			}
+		} catch (error) {
+			console.error("Invalid URL when generating file name:", url, error);
+		}
+
+		const extension = this.getFileExtension(url, contentType);
+		return `downloaded.${extension}`;
+	}
+
+	private getFileExtension(url: string, contentType: string): string {
+		const urlMatch = url.match(/\.([a-zA-Z0-9]+)(?:[?#]|$)/);
+		if (urlMatch) {
+			return urlMatch[1];
+		}
+
+		const map: Record<string, string> = {
+			"image/jpeg": "jpg",
+			"image/png": "png",
+			"image/gif": "gif",
+			"image/webp": "webp",
+			"image/svg+xml": "svg",
+			"image/bmp": "bmp",
+			"image/x-icon": "ico",
+		};
+		return map[contentType.toLowerCase()] || "bin";
+	}
+
+	private async uploadImageFile(
+		file: File,
+		noteFile: TFile,
+		localUpload: boolean,
+	): Promise<string> {
+		let buf = await file.arrayBuffer();
+		const digest = await generateFileHash(new Uint8Array(buf));
+		const extension = file.name.split(".").pop() || this.getFileExtension(file.name, file.type);
+		const newFileName = `${digest}.${extension}`;
+
+		const fm = this.app.metadataCache.getFileCache(noteFile)?.frontmatter;
+		let folder = localUpload
+			? fm?.uploadFolder ?? this.settings.localUploadFolder
+			: fm?.uploadFolder ?? this.settings.folder;
+
+		const currentDate = new Date();
+
+		folder = folder
+			.replace("${year}", currentDate.getFullYear().toString())
+			.replace(
+				"${month}",
+				String(currentDate.getMonth() + 1).padStart(2, "0"),
+			)
+			.replace(
+				"${day}",
+				String(currentDate.getDate()).padStart(2, "0"),
+			)
+			.replace(
+				"${basename}",
+				noteFile.basename.replace(/ /g, "-"),
+			);
+
+		const key = folder ? `${folder}/${newFileName}` : newFileName;
+
+		if (file.type.match(/image.*/) && this.settings.enableImageCompression) {
+			buf = await this.compressImage(file);
+			file = new File([buf], newFileName, {
+				type: file.type,
+			});
+		}
+
+		if (!localUpload) {
+			return await this.uploadFile(file, key);
+		} else {
+			await this.app.vault.adapter.writeBinary(key, new Uint8Array(buf));
+			return this.app.vault.adapter instanceof FileSystemAdapter
+				? this.app.vault.adapter.getFilePath(key)
+				: key;
+		}
+	}
+
 	createS3Client(): void {
 		// Don't create S3 client if region is not configured
 		if (!this.settings.region) {
@@ -499,6 +735,16 @@ export default class S3UploaderPlugin extends Plugin {
 				};
 				input.click();
 				input.remove(); // delete element
+			},
+		});
+
+		this.addCommand({
+			id: "upload-external-image-links",
+			name: "Upload external image links in current note",
+			icon: "cloud-upload",
+			mobileOnly: false,
+			editorCallback: async (editor) => {
+				await this.uploadExternalImagesInCurrentNote(editor);
 			},
 		});
 

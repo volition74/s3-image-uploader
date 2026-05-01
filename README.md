@@ -58,6 +58,8 @@ You also need to set up a user with write access to your bucket. You can do this
 
 When you paste an image from the clipboard into the Obsidian note, the plugin will upload the image to your bucket, and insert a link to the image in your note. The link will be of the form `https://<your-bucket>.s3.<your-region>.amazonaws.com/<your-optional-folder>/<image-name>`. If you have made your bucket world readable, you can share the link with others, and they will be able to view the image.
 
+If you have pasted an external image URL into a note, you can now run the command `Upload external image links in current note` to download those images, upload them to your bucket, and replace the original external links.
+
 If you select the "Upload on drag" option in the plugin settings, the plugin will also upload images that you drag into the note - as well as video, audio files and pdfs. This is useful if you want to upload these media from your file system.
 
 If you do not want this behavior in all notes, you can customize it on a per note basis.
