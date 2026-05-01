@@ -2,9 +2,7 @@
 
 This is a plugin for [Obsidian](https://obsidian.md). It was generated based on the [standard plugin template](https://github.com/obsidianmd/obsidian-sample-plugin).
 
-This project implements an image uploader, similar to others offered by the community, with one important difference: you can provide your own s3 based storage, instead of relying on a third party service, such as `imgur`.
-
-This plugin is supported by advertisements.
+This forked project implements an image uploader, similar to others offered by the community, with one important difference: you can provide your own s3 based storage, instead of relying on a third party service, such as `imgur`. **New this Fork** If you have pasted an external image URL into a note, you can now run the command `Upload external image links in current note` to download those images, upload them to your bucket, and replace the original external links.
 
 Note: this plugin is still in development, and there may be some bugs. Please report any issues you find.
 
@@ -57,8 +55,6 @@ You also need to set up a CORS policy for the bucket:
 You also need to set up a user with write access to your bucket. You can do this by creating a new user in the IAM console, and attaching the `AmazonS3FullAccess` policy to it. More granular access control policies are possible, but this is the simplest way to get started.
 
 When you paste an image from the clipboard into the Obsidian note, the plugin will upload the image to your bucket, and insert a link to the image in your note. The link will be of the form `https://<your-bucket>.s3.<your-region>.amazonaws.com/<your-optional-folder>/<image-name>`. If you have made your bucket world readable, you can share the link with others, and they will be able to view the image.
-
-If you have pasted an external image URL into a note, you can now run the command `Upload external image links in current note` to download those images, upload them to your bucket, and replace the original external links.
 
 If you select the "Upload on drag" option in the plugin settings, the plugin will also upload images that you drag into the note - as well as video, audio files and pdfs. This is useful if you want to upload these media from your file system.
 
