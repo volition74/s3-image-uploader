@@ -2,7 +2,12 @@
 
 This is a plugin for [Obsidian](https://obsidian.md). It was generated based on the [standard plugin template](https://github.com/obsidianmd/obsidian-sample-plugin).
 
-This forked project implements an image uploader, similar to others offered by the community, with one important difference: you can provide your own s3 based storage, instead of relying on a third party service, such as `imgur`. **New this Fork** If you have pasted an external image URL into a note, you can now run the command `Upload external image links in current note` to download those images, upload them to your bucket, and replace the original external links.
+This forked project implements an image uploader, similar to others offered by the community, with one important difference: you can provide your own s3 based storage, instead of relying on a third party service, such as `imgur`.
+
+**New this Fork** - `Upload external image links in current note` command
+
+1. If you have pasted an external image URL into a note, you can now run the command `Upload external image links in current note` to download those images, upload them to your bucket, and replace the original external links.
+2. Also includes an option to uplaod local vault image references in the current note. Local image uploads can be toggled independently, and you can optionally delete the local source images after they are uploaded.
 
 Note: this plugin is still in development, and there may be some bugs. Please report any issues you find.
 

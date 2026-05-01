@@ -48,6 +48,8 @@ interface S3UploaderSettings {
 	uploadOnDrag: boolean;
 	localUpload: boolean;
 	localUploadFolder: string;
+	uploadLocalNoteImages: boolean;
+	deleteLocalImagesAfterUpload: boolean;
 	useCustomEndpoint: boolean;
 	customEndpoint: string;
 	forcePathStyle: boolean;
@@ -77,6 +79,8 @@ const DEFAULT_SETTINGS: S3UploaderSettings = {
 	uploadOnDrag: true,
 	localUpload: false,
 	localUploadFolder: "",
+	uploadLocalNoteImages: true,
+	deleteLocalImagesAfterUpload: false,
 	useCustomEndpoint: false,
 	customEndpoint: "",
 	forcePathStyle: false,
@@ -452,11 +456,24 @@ export default class S3UploaderPlugin extends Plugin {
 		const content = editor.getValue();
 		const references = this.parseExternalImageReferences(content);
 		if (references.length === 0) {
-			new Notice("No external image links found in the current note.");
+			new Notice("No image links found in the current note.");
 			return;
 		}
 
-		new Notice(`Uploading ${references.length} external image(s)...`);
+		const filteredReferences = references.filter(
+			(item) =>
+				item.source === "external" ||
+				this.settings.uploadLocalNoteImages,
+		);
+
+		if (filteredReferences.length === 0) {
+			new Notice(
+				"Local image upload is disabled in settings, and there are no external image links to upload.",
+			);
+			return;
+		}
+
+		new Notice(`Uploading ${filteredReferences.length} image(s)...`);
 
 		const localUpload =
 			this.app.metadataCache.getFileCache(noteFile)?.frontmatter
@@ -464,7 +481,8 @@ export default class S3UploaderPlugin extends Plugin {
 
 		const uploadResults: Array<{
 			item: {
-				type: "markdown" | "html";
+				source: "external" | "local";
+				format: "markdown" | "html";
 				fullMatch: string;
 				url: string;
 				alt: string;
@@ -473,24 +491,35 @@ export default class S3UploaderPlugin extends Plugin {
 				end: number;
 			};
 			url: string;
+			localFilePath?: string;
 		}> = [];
 
-		for (const item of references) {
+		for (const item of filteredReferences) {
 			try {
-				const file = await this.downloadRemoteFile(item.url);
+				let file: File;
+				let localFilePath: string | undefined;
+
+				if (item.source === "external") {
+					file = await this.downloadRemoteFile(item.url);
+				} else {
+					const local = await this.loadLocalImageFile(item.url, noteFile);
+					file = local.file;
+					localFilePath = local.sourceFile.path;
+				}
+
 				const url = await this.uploadImageFile(
 					file,
 					noteFile,
 					localUpload,
 				);
-				uploadResults.push({ item, url });
+				uploadResults.push({ item, url, localFilePath });
 			} catch (error) {
-				console.error("Failed to upload external image", item.url, error);
+				console.error("Failed to upload image", item.url, error);
 			}
 		}
 
 		if (uploadResults.length === 0) {
-			new Notice("No external images were uploaded.");
+			new Notice("No images were uploaded.");
 			return;
 		}
 
@@ -498,7 +527,7 @@ export default class S3UploaderPlugin extends Plugin {
 			.sort((a, b) => b.item.start - a.item.start)
 			.map(({ item, url }) => {
 				const replacement =
-					item.type === "markdown"
+					item.format === "markdown"
 						? `![${item.alt}](${url}${
 							item.title ? ` "${item.title}"` : ""
 						})`
@@ -514,15 +543,31 @@ export default class S3UploaderPlugin extends Plugin {
 			});
 
 		editor.transaction({ changes });
+
+		if (this.settings.deleteLocalImagesAfterUpload) {
+			const pathsToDelete = new Set(
+				uploadResults
+					.filter((result) => result.localFilePath)
+					.map((result) => result.localFilePath as string),
+			);
+			for (const path of pathsToDelete) {
+				const localFile = this.app.vault.getAbstractFileByPath(path);
+				if (localFile instanceof TFile) {
+					await this.app.vault.delete(localFile);
+				}
+			}
+		}
+
 		new Notice(
-			`Uploaded ${uploadResults.length} external image(s) in current note.`,
+			`Uploaded ${uploadResults.length} image(s) in current note.`,
 		);
 	}
 
 	private parseExternalImageReferences(
 		content: string,
 	): Array<{
-		type: "markdown" | "html";
+		source: "external" | "local";
+		format: "markdown" | "html";
 		fullMatch: string;
 		url: string;
 		alt: string;
@@ -531,7 +576,8 @@ export default class S3UploaderPlugin extends Plugin {
 		end: number;
 	}> {
 		const references: Array<{
-		type: "markdown" | "html";
+		source: "external" | "local";
+		format: "markdown" | "html";
 		fullMatch: string;
 		url: string;
 		alt: string;
@@ -540,11 +586,12 @@ export default class S3UploaderPlugin extends Plugin {
 		end: number;
 	}> = [];
 
-		const markdownRegex = /!\[([^\]]*)\]\(\s*(https?:\/\/[^\s)]+?)(?:\s+["']([^"']*)["'])?\s*\)/g;
+		const markdownExternalRegex = /!\[([^\]]*)\]\(\s*(https?:\/\/[^\s)]+?)(?:\s+["']([^"']*)["'])?\s*\)/g;
 		let markdownMatch: RegExpExecArray | null;
-		while ((markdownMatch = markdownRegex.exec(content))) {
+		while ((markdownMatch = markdownExternalRegex.exec(content))) {
 			references.push({
-				type: "markdown",
+				source: "external",
+				format: "markdown",
 				fullMatch: markdownMatch[0],
 				url: markdownMatch[2],
 				alt: markdownMatch[1] ?? "",
@@ -554,15 +601,50 @@ export default class S3UploaderPlugin extends Plugin {
 			});
 		}
 
-		const htmlRegex = /<img\s+[^>]*src=(['"])(https?:\/\/[^"']+)\1[^>]*>/gi;
+		const markdownLocalRegex = /!\[([^\]]*)\]\(\s*([^\s)]+?)\s*\)/g;
+		while ((markdownMatch = markdownLocalRegex.exec(content))) {
+			const source = markdownMatch[2];
+			if (/^(https?:\/\/|data:|file:)/i.test(source)) {
+				continue;
+			}
+			references.push({
+				source: "local",
+				format: "markdown",
+				fullMatch: markdownMatch[0],
+				url: source,
+				alt: markdownMatch[1] ?? "",
+				title: "",
+				start: markdownMatch.index,
+				end: markdownMatch.index + markdownMatch[0].length,
+			});
+		}
+
+		const wikiImageRegex = /!\[\[([^\]\|]+)(?:\|([^\]]*))?\]\]/g;
+		let wikiMatch: RegExpExecArray | null;
+		while ((wikiMatch = wikiImageRegex.exec(content))) {
+			references.push({
+				source: "local",
+				format: "markdown",
+				fullMatch: wikiMatch[0],
+				url: wikiMatch[1].trim(),
+				alt: wikiMatch[2] ?? "",
+				title: "",
+				start: wikiMatch.index,
+				end: wikiMatch.index + wikiMatch[0].length,
+			});
+		}
+
+		const htmlRegex = /<img\s+[^>]*src=(['"])([^"']+)\1[^>]*>/gi;
 		let htmlMatch: RegExpExecArray | null;
 		while ((htmlMatch = htmlRegex.exec(content))) {
 			const fullMatch = htmlMatch[0];
+			const src = htmlMatch[2];
 			const altMatch = /alt=(['"])(.*?)\1/i.exec(fullMatch);
 			references.push({
-				type: "html",
+				source: /^(https?:\/\/|data:|file:)/i.test(src) ? "external" : "local",
+				format: "html",
 				fullMatch,
-				url: htmlMatch[2],
+				url: src,
 				alt: altMatch?.[2] ?? "",
 				title: "",
 				start: htmlMatch.index,
@@ -571,6 +653,111 @@ export default class S3UploaderPlugin extends Plugin {
 		}
 
 		return references;
+	}
+
+	private async loadLocalImageFile(
+		source: string,
+		noteFile: TFile,
+	): Promise<{ file: File; sourceFile: TFile }> {
+		const vaultPath = this.resolveLocalVaultPath(noteFile.path, source);
+		const localFile = this.app.vault.getAbstractFileByPath(vaultPath);
+		if (!(localFile instanceof TFile)) {
+			throw new Error(`Local image file not found: ${source}`);
+		}
+
+		const fileContent = await this.app.vault.readBinary(localFile);
+		const buffer =
+			ArrayBuffer.isView(fileContent) || fileContent instanceof ArrayBuffer
+				? fileContent
+				: new Uint8Array(fileContent).buffer;
+		const contentType = this.getContentTypeFromName(localFile.name);
+		return {
+			file: new File([buffer], localFile.name, { type: contentType }),
+			sourceFile: localFile,
+		};
+	}
+
+	private resolveLocalVaultPath(notePath: string, source: string): string {
+		const normalized = source.replace(/\\/g, "/").trim().replace(/^\/+/, "");
+		if (normalized.startsWith("./") || normalized.startsWith("../")) {
+			const folder = notePath.includes("/")
+				? notePath.slice(0, notePath.lastIndexOf("/"))
+				: "";
+			const parts = folder ? folder.split("/") : [];
+			for (const segment of normalized.split("/")) {
+				if (segment === "." || segment === "") {
+					continue;
+				}
+				if (segment === "..") {
+					parts.pop();
+					continue;
+				}
+				parts.push(segment);
+			}
+			return parts.join("/");
+		}
+
+		const noteFolder = notePath.includes("/")
+			? notePath.slice(0, notePath.lastIndexOf("/"))
+			: "";
+		const relativePath = noteFolder ? `${noteFolder}/${normalized}` : normalized;
+		const relativeFile = this.app.vault.getAbstractFileByPath(relativePath);
+		if (relativeFile instanceof TFile) {
+			return relativePath;
+		}
+
+		const matchedFile = this.findVaultFileByShortPath(normalized, noteFolder);
+		return matchedFile?.path || normalized;
+	}
+
+	private findVaultFileByShortPath(
+		shortPath: string,
+		noteFolder: string,
+	): TFile | null {
+		const normalized = shortPath.replace(/^\/+/, "");
+		const candidates = this.app.vault
+			.getFiles()
+			.filter((file) =>
+				file.path === normalized || file.path.endsWith(`/${normalized}`),
+			);
+		if (candidates.length === 1) {
+			return candidates[0];
+		}
+
+		if (candidates.length > 1) {
+			const sameFolder = candidates.find((file) =>
+				file.path.startsWith(`${noteFolder}/`) ||
+				file.path === `${noteFolder}/${normalized}`,
+			);
+			if (sameFolder) {
+				return sameFolder;
+			}
+			return candidates[0];
+		}
+
+		if (!shortPath.includes("/")) {
+			const nameMatch = this.app.vault
+				.getFiles()
+				.find((file) => file.name === normalized);
+			return nameMatch || null;
+		}
+
+		return null;
+	}
+
+	private getContentTypeFromName(fileName: string): string {
+		const extension = fileName.split(".").pop()?.toLowerCase() || "";
+		const map: Record<string, string> = {
+			jpg: "image/jpeg",
+			jpeg: "image/jpeg",
+			png: "image/png",
+			gif: "image/gif",
+			webp: "image/webp",
+			svg: "image/svg+xml",
+			bmp: "image/bmp",
+			ico: "image/x-icon",
+		};
+		return map[extension] || "application/octet-stream";
 	}
 
 	private async downloadRemoteFile(url: string): Promise<File> {
@@ -740,7 +927,7 @@ export default class S3UploaderPlugin extends Plugin {
 
 		this.addCommand({
 			id: "upload-external-image-links",
-			name: "Upload external image links in current note",
+			name: "Upload external and local image links in current note",
 			icon: "cloud-upload",
 			mobileOnly: false,
 			editorCallback: async (editor) => {
@@ -1022,6 +1209,34 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.localUpload)
 					.onChange(async (value) => {
 						this.plugin.settings.localUpload = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Upload local note images")
+			.setDesc(
+				"When enabled, local image references in the current note will also be uploaded or copied when running the upload command.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.uploadLocalNoteImages)
+					.onChange(async (value) => {
+						this.plugin.settings.uploadLocalNoteImages = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Delete local source images after upload")
+			.setDesc(
+				"When enabled, local vault image files will be deleted after they are uploaded and replaced in the note.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.deleteLocalImagesAfterUpload)
+					.onChange(async (value) => {
+						this.plugin.settings.deleteLocalImagesAfterUpload = value;
 						await this.plugin.saveSettings();
 					});
 			});
