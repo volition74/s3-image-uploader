@@ -17,6 +17,10 @@ It was inspired by the awesome Markdown editor, Typora, and the following Obsidi
 -   [Remotely Save](https://github.com/remotely-save/remotely-save)
 -   [Obsidian Imgur Plugin](https://github.com/gavvvr/obsidian-imgur-plugin)
 
+## Install
+
+Unzip this folder and place in your plugins folder of vault
+
 ## Usage
 
 You have to set up your own s3 bucket, and provide the following information to the plugin:
