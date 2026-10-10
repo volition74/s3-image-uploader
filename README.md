@@ -8,6 +8,7 @@ This forked project implements an image uploader, similar to others offered by t
 
 1. If you have pasted an external image URL into a note, you can now run the command `Upload external image links in current note` to download those images, upload them to your bucket, and replace the original external links.
 2. Also includes an option to uplaod local vault image references in the current note. Local image uploads can be toggled independently, and you can optionally delete the local source images after they are uploaded.
+3. The command skips external images already in the configured S3 bucket. Enable `Also match bucket folder` in plugin settings to skip only images in the configured folder, so images in other folders of the same bucket can be uploaded to the current folder. This option is off by default; if no bucket folder is configured, matching uses the bucket alone.
 
 Note: this plugin is still in development, and there may be some bugs. Please report any issues you find.
 

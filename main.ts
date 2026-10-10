@@ -44,6 +44,7 @@ interface S3UploaderSettings {
 	region: string;
 	bucket: string;
 	folder: string;
+	filterUploadedByFolder: boolean;
 	imageUrlPath: string;
 	uploadOnDrag: boolean;
 	localUpload: boolean;
@@ -75,6 +76,7 @@ const DEFAULT_SETTINGS: S3UploaderSettings = {
 	region: "",
 	bucket: "",
 	folder: "",
+	filterUploadedByFolder: false,
 	imageUrlPath: "",
 	uploadOnDrag: true,
 	localUpload: false,
@@ -463,14 +465,14 @@ export default class S3UploaderPlugin extends Plugin {
 		const filteredReferences = references.filter(
 			(item) =>
 				(item.source === "external" &&
-					!item.url.includes("amazonaws.com")) ||
+					!this.isAlreadyInConfiguredS3Location(item.url)) ||
 				(item.source === "local" &&
 					this.settings.uploadLocalNoteImages),
 		);
 
 		if (filteredReferences.length === 0) {
 			new Notice(
-				"Local image upload is disabled in settings, and there are no external image links to upload.",
+				"No images need uploading. Check the local-image and bucket-folder settings if you expected images to be processed.",
 			);
 			return;
 		}
@@ -563,6 +565,63 @@ export default class S3UploaderPlugin extends Plugin {
 		new Notice(
 			`Uploaded ${uploadResults.length} image(s) in current note.`,
 		);
+	}
+
+	private isAlreadyInConfiguredS3Location(imageUrl: string): boolean {
+		const bucket = this.settings.bucket.trim();
+		if (!bucket) {
+			return false;
+		}
+
+		let parsedUrl: URL;
+		try {
+			parsedUrl = new URL(imageUrl);
+		} catch {
+			return false;
+		}
+
+		const pathSegments = parsedUrl.pathname
+			.split("/")
+			.filter(Boolean)
+			.map((segment) => {
+				try {
+					return decodeURIComponent(segment);
+				} catch {
+					return segment;
+				}
+			});
+		const hostHasBucket = parsedUrl.hostname
+			.toLowerCase()
+			.split(".")
+			.includes(bucket.toLowerCase());
+		const bucketPathIndex = pathSegments.findIndex(
+			(segment) => segment.toLowerCase() === bucket.toLowerCase(),
+		);
+
+		if (!hostHasBucket && bucketPathIndex === -1) {
+			return false;
+		}
+
+		const folder = this.settings.folder.trim().replace(/^\/+|\/+$/g, "");
+		if (!this.settings.filterUploadedByFolder || !folder) {
+			return true;
+		}
+
+		const objectPath =
+			bucketPathIndex >= 0
+				? pathSegments.slice(bucketPathIndex + 1)
+				: pathSegments;
+		const folderSegments = folder.split("/");
+		if (objectPath.length < folderSegments.length) {
+			return false;
+		}
+
+		return folderSegments.every((segment, index) => {
+			const templatePattern = segment
+				.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+				.replace(/\\\$\\\{(?:year|month|day|basename)\\\}/g, "[^/]+");
+			return new RegExp(`^${templatePattern}$`).test(objectPath[index]);
+		});
 	}
 
 	private parseExternalImageReferences(
@@ -1144,6 +1203,20 @@ class S3UploaderSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		new Setting(containerEl)
+			.setName("Also match bucket folder")
+			.setDesc(
+				"When enabled, an external image is considered already uploaded only if it is in the configured S3 bucket folder. When disabled, any image in the configured bucket is skipped. If no folder is set, bucket matching is used.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.filterUploadedByFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.filterUploadedByFolder = value;
+						await this.plugin.saveSettings();
+					});
+			});
 
 		new Setting(containerEl)
 			.setName("Upload on drag")
